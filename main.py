@@ -1,3 +1,4 @@
 import PyQt5
 import serial
-import MatPlotLib
+import matplotlib.pyplot as plt
+import numpy
