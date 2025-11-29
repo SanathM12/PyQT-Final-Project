@@ -2,6 +2,7 @@ import PyQt5
 import serial
 import matplotlib.pyplot as plt
 import numpy
+import time
 
 ser = serial.Serial('COM3', 9600, timeout=1)
 time.sleep(2)
