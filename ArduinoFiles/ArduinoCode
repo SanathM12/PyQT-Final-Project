@@ -1,0 +1,60 @@
+#include <DHT.h>
+
+
+//Port for Temperature Sensor
+#define DHTPIN 3
+
+//Type of Sensor
+#define DHTTYPE DHT11
+
+//Creates the DHT Object
+DHT dht(DHTPIN, DHTTYPE);
+
+//Ports for the Motor H Bridge Controller
+#define ENA 6
+#define IN1 5
+#define IN2 4
+
+//Variable for the PWM signal given by PySerial
+int pwmFromPython = 0;
+
+//Main Power Up Loop
+void setup() {
+  Serial.begin(9600);
+  dht.begin();
+
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+
+  // Motor always forward
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+}
+
+//Infinity Loop
+void loop() {
+
+  //Reads in Temp Data
+  float temp = dht.readTemperature();
+
+  //Backup for if something happens and no data is returned
+  if (isnan(temp)) return;
+
+  // Read new PWM byte
+  if (Serial.available()) {
+    pwmFromPython = Serial.read();  // 0–255
+  }
+
+  // Set fan speed
+  analogWrite(ENA, pwmFromPython);
+
+  // Return temperature and actual PWM
+  Serial.print(temp);
+  Serial.print(",");
+  Serial.println(pwmFromPython);
+
+  //One Second Delay
+  delay(1000);
+}
+
