@@ -1,43 +1,25 @@
-import PyQt5
-import serial
-import matplotlib.pyplot as plt
-import numpy
-import time
+if __name__ == "__main__":
+    import sys
+    from PyQt5.QtWidgets import QApplication
+    from PyQt5.QtCore import QTimer
 
-ser = serial.Serial('COM3', 9600, timeout=1)
-time.sleep(2)
+    app = QApplication(sys.argv)
+    window = MotorTest()
+    window.show()
 
-if not ser.is_open:
-    print("Serial port not open")
-    exit()
+    # Timer to read temperature from Arduino continuously
+    window.read_timer = QTimer()
+    window.read_timer.timeout.connect(window.read_temperature)
+    window.read_timer.start(1000)
 
-SETPOINT = 30.0
+    # Timer to update MatPlotLib graph
+    window.plot_timer = QTimer()
+    window.plot_timer.timeout.connect(window.update_plot)
+    window.plot_timer.start(1000)
 
-def read_temp():
-    try:
-        line = ser.readline().decode().strip()
-        return float(line)
-    except:
-        return None
+    # Timer to perform automated fan control logic
+    window.control_timer = QTimer()
+    window.control_timer.timeout.connect(window.auto_fan_control)
+    window.control_timer.start(1000)
 
-def fan_on():
-    ser.write(b'ON\n')
-
-def fan_off():
-    ser.write(b'OFF\n')
-
-
-while True:
-    temp = read_temp()
-
-    if temp is not None:
-        print(f"Temp: {temp:.2f} °C")
-
-        if temp >= SETPOINT:
-            fan_on()
-            print("Fan: ON")
-        else:
-            fan_off()
-            print("Fan: OFF")
-
-    time.sleep(0.5)
+    sys.exit(app.exec_())
