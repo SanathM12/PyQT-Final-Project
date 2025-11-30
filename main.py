@@ -1,30 +1,31 @@
 import PyQt5
-import serial
 import matplotlib.pyplot as plt
 import numpy
+import serial
 import time
 
-ser = serial.Serial('COM3', 9600, timeout=1)
+ser = serial.Serial('COM8', 9600, timeout=1)
 time.sleep(2)
 
 if not ser.is_open:
     print("Serial port not open")
     exit()
 
-SETPOINT = 30.0
+SETPOINT = 26
 
 def read_temp():
     try:
         line = ser.readline().decode().strip()
-        return float(line)
+        temp_str, pwm_str = line.split(",")
+        return float(temp_str)
     except:
         return None
 
 def fan_on():
-    ser.write(b'ON\n')
+    ser.write(bytes([255]))  # full speed
 
 def fan_off():
-    ser.write(b'OFF\n')
+    ser.write(bytes([0]))    # off
 
 
 while True:
@@ -35,9 +36,9 @@ while True:
 
         if temp >= SETPOINT:
             fan_on()
-            print("Fan: ON")
+            print("Fan: ON (255)")
         else:
             fan_off()
-            print("Fan: OFF")
+            print("Fan: OFF (0)")
 
     time.sleep(0.5)
