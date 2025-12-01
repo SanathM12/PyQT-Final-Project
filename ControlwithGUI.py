@@ -118,7 +118,7 @@ class SerialWorker(QThread):
                     elif temp <= self.bb_low:
                         pwm = 0
                 elif self.mode == SerialWorker.MODE_PID:
-                    error = temp self.pid_target - temp
+                    error = temp - self.pid_target
                     
                     if 0 < self.last_output < 255:
                         self._integral += error * dt
