@@ -20,3 +20,11 @@ To consider this project successful, the following goals must be met:
 - **Bang-bang control:** Turn the fan on or off based on temperature thresholds  
 - **Variable control:** Dynamically adjust fan behavior to maintain a target temperature  
 - **Emergency response mode:** Special high-temperature alert or response, e.g., triggered with a lighter during testing
+
+## How to Use Arduino Code
+- Download the Arduino code in the ArduinoFiles folder
+- Install and open the Arduino IDE
+- Connect your Arduino to the computer, select the correct hardware, and port
+- Upload the provided file to the Arduino  
+
+
