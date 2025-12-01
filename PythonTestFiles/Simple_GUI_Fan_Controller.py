@@ -135,3 +135,27 @@ class TempControlGUI(QWidget):
         self.ser.write(b'OFF\n')
         self.ser.close()
         event.accept()
+        
+    def run_pid(self, temperature):
+        
+        Kp = 4.0
+        Ki = 0.3
+        Kd = 1.2
+        
+        now = time.time()
+        dt = now - self.last_time
+        if dt <= 0:
+            return
+
+        error = AUTO_ON_THRESHOLD - temperature
+        self.integral += error * dt
+        derivative = (error - self.last_error) / dt
+
+        output = Kp*error + Ki*self.integral + Kd*derivative
+        pwm = int(max(0, min(255, output)))
+
+        msg = f"PWM:{pwm}\n"
+        self.ser.write(msg.encode())
+
+        self.last_error = error
+        self.last_time = now
