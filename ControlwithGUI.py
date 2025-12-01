@@ -27,6 +27,7 @@ class SerialWorker(QThread):
     MODE_EMERGENCY = 2
 
     def __init__(self, port, baud=9600, update_interval=0.5, dry_run=False):
+        # Variable setup
         super().__init__()
         self.port = port
         self.baud = baud
@@ -34,6 +35,7 @@ class SerialWorker(QThread):
         self.dry_run = dry_run
         self._running = False
         self._ser = None
+        
 
         # control params (defaults)
         self.mode = SerialWorker.MODE_BANG
@@ -122,8 +124,6 @@ class SerialWorker(QThread):
                     
                     if 0 < self.last_output < 255:
                         self._integral += error * dt
-                    self._integral = max(-50, min(50, self._integral))
-
                     derivative = (error - self._last_error) / dt if dt > 0 else 0.0
                     self._last_error = error
 
@@ -298,7 +298,6 @@ class FanControllerGUI(QWidget):
 
         self.ax_temp.set_ylabel("Temperature °C")
         self.ax_temp.set_xlabel("Time (s)")
-        self.fig.tight_layout()
 
         self.refresh_button.clicked.connect(self.refresh_ports)
         self.connect_button.clicked.connect(self.connect_serial)
@@ -318,10 +317,6 @@ class FanControllerGUI(QWidget):
         dry_run = self.dry_run_checkbox.isChecked()
         port = self.port_combo.currentData() if self.port_combo.count() > 0 else "SIMULATION"
 
-        if not dry_run and self.port_combo.count() == 0:
-            QMessageBox.warning(self, "No port", "No serial ports found. Plug in Arduino or enable Simulation Mode.")
-            return
-
         self.worker = SerialWorker(port, dry_run=dry_run)
 
         self.worker.data_signal.connect(self._on_new_data)
@@ -331,21 +326,15 @@ class FanControllerGUI(QWidget):
         self.disconnect_button.setEnabled(True)
 
         status_msg = "Simulation Worker prepared." if dry_run else f"Serial port {port} prepared."
-        QMessageBox.information(self, "Worker prepared", f"{status_msg} Hit Start to begin.")
 
     def disconnect_serial(self):
-        if self.worker and self.worker.isRunning():
-            QMessageBox.warning(self, "Running", "Stop worker before disconnecting.")
-            return
+        
         self.worker = None
         self.connect_button.setEnabled(True)
         self.disconnect_button.setEnabled(False)
-        QMessageBox.information(self, "Disconnected", "Serial detached.")
 
     def apply_params(self):
-        if not self.worker:
-            QMessageBox.warning(self, "No serial", "Connect serial (Prepare) before applying params.")
-            return
+
         try:
             bb_low = float(self.bb_low_input.text())
             bb_high = float(self.bb_high_input.text())
@@ -365,15 +354,7 @@ class FanControllerGUI(QWidget):
         mode = self.mode_combo.currentData()
         self.worker.set_mode(mode)
 
-        QMessageBox.information(self, "Parameters applied", "Parameters sent to controller (Python-side).")
-
     def start_worker(self):
-        if not self.worker:
-            QMessageBox.warning(self, "No serial", "Connect serial (Prepare) first.")
-            return
-        if self.worker.isRunning():
-            QMessageBox.warning(self, "Already running", "Worker is already running.")
-            return
 
         self.times.clear()
         self.temps.clear()
@@ -387,7 +368,6 @@ class FanControllerGUI(QWidget):
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.plot_timer.start()
-        QMessageBox.information(self, "Started", "Control loop started.")
 
     def stop_worker(self):
         if self.worker and self.worker.isRunning():
@@ -395,7 +375,6 @@ class FanControllerGUI(QWidget):
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.plot_timer.stop()
-        QMessageBox.information(self, "Stopped", "Control loop stopped.")
 
     def _on_new_data(self, temp, pwm, timestamp):
         if self.t0 is None:
@@ -448,9 +427,7 @@ class FanControllerGUI(QWidget):
         self.ax_temp.tick_params(axis='y', labelcolor='blue')
         self.ax_temp.set_xlabel("Time (s)")
 
-        t_min = self.times[0]
-        t_max = self.times[-1]
-        self.ax_temp.set_xlim(t_min, t_max + 1)
+        self.ax_temp.set_xlim(auto=True)
 
         pwm_line, = self.ax_pwm_twin.plot(self.times, self.pwms, drawstyle='steps-post', label='PWM Output',
                                           color='red', alpha=0.6)
@@ -490,3 +467,4 @@ if __name__ == "__main__":
     w = FanControllerGUI()
     w.show()
     sys.exit(app.exec_())
+    
