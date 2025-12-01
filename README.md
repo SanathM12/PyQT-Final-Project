@@ -21,14 +21,10 @@ To consider this project successful, the following goals must be met:
 - **Variable control:** Dynamically adjust fan behavior to maintain a target temperature  
 - **Emergency response mode:** Special high-temperature alert or response, e.g., triggered with a lighter during testing
 
-## Use Instructions with Arduino
-- Assemble arduino circuit
-- Connect to laptop/desktop
-- Run ControlwithGUI program and test with editing setpoints
-- Use GUI to edit PID control variables
+## How to Use Arduino Code
+- Download the Arduino code in the ArduinoFiles folder
+- Install and open the Arduino IDE
+- Connect your Arduino to the computer, select the correct hardware, and port
+- Upload the provided file to the Arduino  
 
-## Use Instructions without Arduino
-- Run ControlwithGUI file program
-- Simulator is included in this code
-- Edit PID variables
-- Run program and look at chart and edit varibales as needed
+
