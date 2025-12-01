@@ -1,0 +1,459 @@
+# fan_controller_gui.py
+import sys
+import time
+from collections import deque
+
+import serial
+import serial.tools.list_ports
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QLineEdit, QComboBox, QGroupBox, QFormLayout, QMessageBox, QSpinBox
+)
+
+
+# ----------------------------
+# Worker thread: serial read + control
+# ----------------------------
+class SerialWorker(QThread):
+    data_signal = pyqtSignal(float, int, float)  # temp, pwm, timestamp
+    error_signal = pyqtSignal(str)
+    mode_changed = pyqtSignal(int, float)  # new_mode, timestamp
+
+    MODE_BANG = 0
+    MODE_PID = 1
+    MODE_EMERGENCY = 2
+
+    def __init__(self, port, baud=9600, update_interval=0.5):
+        super().__init__()
+        self.port = port
+        self.baud = baud
+        self.update_interval = update_interval
+        self._running = False
+        self._ser = None
+
+        # control params (defaults)
+        self.mode = SerialWorker.MODE_BANG
+        # Bang-Bang thresholds
+        self.bb_low = 24.0
+        self.bb_high = 26.0
+        # PID params & target
+        self.pid_target = 25.0
+        self.Kp = 20.0
+        self.Ki = 0.5
+        self.Kd = 5.0
+        # Emergency threshold
+        self.emergency_temp = 40.0
+
+        # PID internals
+        self._integral = 0.0
+        self._last_error = 0.0
+        self._last_time = None
+
+        # last pwm (for hysteresis maintaining)
+        self._last_pwm = 0
+
+    def run(self):
+        # Open serial
+        try:
+            self._ser = serial.Serial(self.port, self.baud, timeout=1)
+            # small delay for Arduino auto-reset
+            time.sleep(2)
+        except Exception as e:
+            self.error_signal.emit(f"Could not open serial port {self.port}: {e}")
+            return
+
+        self._running = True
+        self._last_time = time.time()
+
+        while self._running:
+            now = time.time()
+            # Attempt to read a line from Arduino
+            try:
+                raw = self._ser.readline().decode('utf-8', errors='ignore').strip()
+                if not raw:
+                    # If nothing received, still run control logic based on last known temp
+                    temp = None
+                else:
+                    # Expect "temp,pwm" (e.g. "25.4,128")
+                    parts = raw.split(",")
+                    if len(parts) >= 1:
+                        try:
+                            temp = float(parts[0])
+                        except:
+                            temp = None
+                    else:
+                        temp = None
+            except Exception as e:
+                self.error_signal.emit(f"Serial read error: {e}")
+                temp = None
+
+            # Compute dt
+            cur_time = time.time()
+            dt = cur_time - self._last_time if self._last_time is not None else 0.0
+            self._last_time = cur_time
+
+            # Decide PWM based on mode
+            pwm = self._last_pwm  # default keep last
+            if self.mode == SerialWorker.MODE_BANG:
+                if temp is not None:
+                    if temp >= self.bb_high:
+                        pwm = 255
+                    elif temp <= self.bb_low:
+                        pwm = 0
+                    # else keep last pwm (hysteresis)
+            elif self.mode == SerialWorker.MODE_PID:
+                # PID needs temp; if no temp available, skip integration
+                if temp is not None:
+                    # error: want positive when too hot (so positive -> increase PWM)
+                    error = temp - self.pid_target
+                    # integral accumulates error over time
+                    self._integral += error * dt
+                    # derivative term (rate of change of error)
+                    derivative = (error - self._last_error) / dt if dt > 0 else 0.0
+                    self._last_error = error
+
+                    # PID formula: positive error (temp > target) -> positive output
+                    output = (self.Kp * error) + (self.Ki * self._integral) + (self.Kd * derivative)
+
+                    # clamp and convert to 0..255
+                    pwm = int(max(0, min(255, output)))
+            elif self.mode == SerialWorker.MODE_EMERGENCY:
+                if temp is not None and temp >= self.emergency_temp:
+                    pwm = 255
+                else:
+                    pwm = 0
+
+            # Send pwm byte to Arduino (single byte)
+            try:
+                if self._ser and self._ser.is_open:
+                    # write single byte
+                    self._ser.write(bytes([pwm]))
+            except Exception as e:
+                self.error_signal.emit(f"Serial write error: {e}")
+
+            # store last pwm
+            self._last_pwm = pwm
+
+            # Emit data for GUI plotting (send timestamp)
+            timestamp = time.time()
+            if temp is not None:
+                self.data_signal.emit(temp, pwm, timestamp)
+
+            # Sleep until next update
+            time.sleep(self.update_interval)
+
+        # Cleanup
+        try:
+            if self._ser and self._ser.is_open:
+                # send 0 to ensure motor is off
+                try:
+                    self._ser.write(bytes([0]))
+                except:
+                    pass
+                self._ser.close()
+        except:
+            pass
+
+    def stop(self):
+        self._running = False
+        self.wait()
+
+    # Methods to update parameters from GUI
+    def set_mode(self, mode):
+        if mode != self.mode:
+            self.mode = mode
+            self._integral = 0.0
+            self._last_error = 0.0
+            self.mode_changed.emit(mode, time.time())
+
+    def set_bb_thresholds(self, low, high):
+        self.bb_low = low
+        self.bb_high = high
+
+    def set_pid_params(self, target, Kp, Ki, Kd):
+        self.pid_target = target
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        # reset integral/derivative terms for safety
+        self._integral = 0.0
+        self._last_error = 0.0
+
+    def set_emergency_threshold(self, temp):
+        self.emergency_temp = temp
+
+
+# ----------------------------
+# Main GUI
+# ----------------------------
+class FanControllerGUI(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Fan Controller (PyQt + PID/Bang-Bang/Emergency)")
+        self.resize(1000, 700)
+
+        # Data buffer
+        self.max_points = 600
+        self.times = deque(maxlen=self.max_points)
+        self.temps = deque(maxlen=self.max_points)
+        self.pwms = deque(maxlen=self.max_points)
+        self.mode_changes = []  # list of (mode, timestamp)
+
+        self._create_ui()
+        self.worker = None
+        self.plot_timer = QTimer()
+        self.plot_timer.setInterval(500)  # update plot twice per second
+        self.plot_timer.timeout.connect(self._update_plot)
+
+    def _create_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Top control row: port selection, connect/disconnect
+        top_row = QHBoxLayout()
+        self.port_combo = QComboBox()
+        self.refresh_ports()
+        self.refresh_button = QPushButton("Refresh Ports")
+        self.connect_button = QPushButton("Connect")
+        self.disconnect_button = QPushButton("Disconnect")
+        self.disconnect_button.setEnabled(False)
+
+        top_row.addWidget(QLabel("Serial Port:"))
+        top_row.addWidget(self.port_combo)
+        top_row.addWidget(self.refresh_button)
+        top_row.addWidget(self.connect_button)
+        top_row.addWidget(self.disconnect_button)
+        layout.addLayout(top_row)
+
+        # Mode selection
+        mode_box = QGroupBox("Control Mode")
+        mode_layout = QHBoxLayout()
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Bang-Bang", 0)
+        self.mode_combo.addItem("PID", 1)
+        self.mode_combo.addItem("Emergency", 2)
+        mode_layout.addWidget(QLabel("Mode:"))
+        mode_layout.addWidget(self.mode_combo)
+        mode_box.setLayout(mode_layout)
+        layout.addWidget(mode_box)
+
+        # Parameter panels
+        params_layout = QHBoxLayout()
+
+        # Bang-Bang param group
+        bb_group = QGroupBox("Bang-Bang")
+        bb_form = QFormLayout()
+        self.bb_low_input = QLineEdit("24.0")
+        self.bb_high_input = QLineEdit("26.0")
+        bb_form.addRow("Low (OFF below):", self.bb_low_input)
+        bb_form.addRow("High (ON above):", self.bb_high_input)
+        bb_group.setLayout(bb_form)
+        params_layout.addWidget(bb_group)
+
+        # PID param group
+        pid_group = QGroupBox("PID")
+        pid_form = QFormLayout()
+        self.pid_target_input = QLineEdit("25.0")
+        self.kp_input = QLineEdit("20.0")
+        self.ki_input = QLineEdit("0.5")
+        self.kd_input = QLineEdit("5.0")
+        pid_form.addRow("Target Temp (°C):", self.pid_target_input)
+        pid_form.addRow("Kp:", self.kp_input)
+        pid_form.addRow("Ki:", self.ki_input)
+        pid_form.addRow("Kd:", self.kd_input)
+        pid_group.setLayout(pid_form)
+        params_layout.addWidget(pid_group)
+
+        # Emergency param group
+        em_group = QGroupBox("Emergency")
+        em_form = QFormLayout()
+        self.em_temp_input = QLineEdit("40.0")
+        em_form.addRow("Emergency Temp (°C):", self.em_temp_input)
+        em_group.setLayout(em_form)
+        params_layout.addWidget(em_group)
+
+        layout.addLayout(params_layout)
+
+        # Action buttons
+        buttons = QHBoxLayout()
+        self.apply_button = QPushButton("Apply Params")
+        self.start_button = QPushButton("Start")
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setEnabled(False)
+        buttons.addWidget(self.apply_button)
+        buttons.addWidget(self.start_button)
+        buttons.addWidget(self.stop_button)
+        layout.addLayout(buttons)
+
+        # Matplotlib Figure
+        self.fig, (self.ax_temp, self.ax_pwm) = plt.subplots(2, 1, sharex=True, figsize=(8, 6))
+        self.canvas = FigureCanvas(self.fig)
+        layout.addWidget(self.canvas)
+
+        # Connect signals
+        self.refresh_button.clicked.connect(self.refresh_ports)
+        self.connect_button.clicked.connect(self.connect_serial)
+        self.disconnect_button.clicked.connect(self.disconnect_serial)
+        self.apply_button.clicked.connect(self.apply_params)
+        self.start_button.clicked.connect(self.start_worker)
+        self.stop_button.clicked.connect(self.stop_worker)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_change_ui)
+
+        # Initial plot setup
+        self.ax_temp.set_ylabel("Temperature °C")
+        self.ax_pwm.set_ylabel("PWM (0-255)")
+        self.ax_pwm.set_xlabel("Time (s)")
+        self.fig.tight_layout()
+
+    def refresh_ports(self):
+        self.port_combo.clear()
+        ports = serial.tools.list_ports.comports()
+        for p in ports:
+            self.port_combo.addItem(f"{p.device} - {p.description}", p.device)
+
+    def connect_serial(self):
+        if self.port_combo.count() == 0:
+            QMessageBox.warning(self, "No port", "No serial ports found. Plug in Arduino and refresh.")
+            return
+        port = self.port_combo.currentData()
+        # Prepare worker but don't start it until user hits Start
+        self.worker = SerialWorker(port)
+        # connect signals
+        self.worker.data_signal.connect(self._on_new_data)
+        self.worker.error_signal.connect(self._on_error)
+        self.worker.mode_changed.connect(self._on_mode_changed_from_worker)
+        self.connect_button.setEnabled(False)
+        self.disconnect_button.setEnabled(True)
+        QMessageBox.information(self, "Serial prepared", f"Serial port {port} prepared. Hit Start to begin.")
+
+    def disconnect_serial(self):
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "Running", "Stop worker before disconnecting.")
+            return
+        self.worker = None
+        self.connect_button.setEnabled(True)
+        self.disconnect_button.setEnabled(False)
+        QMessageBox.information(self, "Disconnected", "Serial detached.")
+
+    def apply_params(self):
+        if not self.worker:
+            QMessageBox.warning(self, "No serial", "Connect serial (Prepare) before applying params.")
+            return
+        # Read and apply parameters to worker
+        try:
+            bb_low = float(self.bb_low_input.text())
+            bb_high = float(self.bb_high_input.text())
+            pid_target = float(self.pid_target_input.text())
+            Kp = float(self.kp_input.text())
+            Ki = float(self.ki_input.text())
+            Kd = float(self.kd_input.text())
+            em_temp = float(self.em_temp_input.text())
+        except ValueError:
+            QMessageBox.warning(self, "Bad input", "Please enter numeric values for all parameters.")
+            return
+
+        self.worker.set_bb_thresholds(bb_low, bb_high)
+        self.worker.set_pid_params(pid_target, Kp, Ki, Kd)
+        self.worker.set_emergency_threshold(em_temp)
+
+        # update mode now too
+        mode = self.mode_combo.currentData()
+        self.worker.set_mode(mode)
+
+        QMessageBox.information(self, "Parameters applied", "Parameters sent to controller (Python-side).")
+
+    def start_worker(self):
+        if not self.worker:
+            QMessageBox.warning(self, "No serial", "Connect serial (Prepare) first.")
+            return
+        if self.worker.isRunning():
+            QMessageBox.warning(self, "Already running", "Worker is already running.")
+            return
+
+        # apply params once more
+        self.apply_params()
+
+        # start thread
+        self.worker.start()
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        self.plot_timer.start()
+        QMessageBox.information(self, "Started", "Control loop started.")
+
+    def stop_worker(self):
+        if self.worker and self.worker.isRunning():
+            self.worker.stop()
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.plot_timer.stop()
+        QMessageBox.information(self, "Stopped", "Control loop stopped.")
+
+    # Incoming data handler
+    def _on_new_data(self, temp, pwm, timestamp):
+        # append to buffers
+        if not self.times:
+            t0 = timestamp
+        else:
+            t0 = self.times[0]
+        rel_time = timestamp - (self.times[0] if self.times else timestamp)
+        self.times.append(rel_time)
+        self.temps.append(temp)
+        self.pwms.append(pwm)
+
+    def _on_error(self, msg):
+        QMessageBox.critical(self, "Serial Error", msg)
+
+    def _on_mode_changed_from_worker(self, mode, timestamp):
+        # record mode change for plotting annotation
+        self.mode_changes.append((mode, timestamp - (self.times[0] if self.times else timestamp)))
+        # also mark immediately on plot
+        self._update_plot()
+
+    def _on_mode_change_ui(self, idx):
+        # when user selects a mode in the UI, update worker immediately (if present)
+        mode = self.mode_combo.itemData(idx)
+        if self.worker:
+            self.worker.set_mode(mode)
+            # record mode change for plotting
+            self.mode_changes.append((mode, time.time() - (self.times[0] if self.times else time.time())))
+            self._update_plot()
+
+    def _update_plot(self):
+        if len(self.times) == 0:
+            return
+
+        self.ax_temp.cla()
+        self.ax_pwm.cla()
+
+        # Plot temperature
+        self.ax_temp.plot(self.times, self.temps)
+        self.ax_temp.set_ylabel("Temperature °C")
+
+        # Plot PWM
+        self.ax_pwm.plot(self.times, self.pwms)
+        self.ax_pwm.set_ylabel("PWM (0-255)")
+        self.ax_pwm.set_xlabel("Time (s)")
+
+        # Draw vertical lines for mode changes (with labels)
+        for (mode, t_rel) in self.mode_changes:
+            label = {0: "Bang-Bang", 1: "PID", 2: "Emergency"}.get(mode, str(mode))
+            self.ax_temp.axvline(x=t_rel, color='k', linestyle='--', linewidth=1)
+            self.ax_pwm.axvline(x=t_rel, color='k', linestyle='--', linewidth=1)
+            self.ax_temp.text(t_rel, max(self.temps), label, rotation=90, va='top', ha='right', fontsize=8, backgroundcolor='w', alpha=0.8)
+
+        self.fig.tight_layout()
+        self.canvas.draw_idle()
+
+
+def main():
+    app = QApplication(sys.argv)
+    w = FanControllerGUI()
+    w.show()
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()
