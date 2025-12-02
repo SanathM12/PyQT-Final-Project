@@ -172,13 +172,13 @@ class FanControllerGUI(QWidget):
         # Reference time for plotting
         self.t0 = None
 
-        self._create_ui()
+        self.create_ui()
         self.worker = None
         self.plot_timer = QTimer()
         self.plot_timer.setInterval(500)
-        self.plot_timer.timeout.connect(self._update_plot)
+        self.plot_timer.timeout.connect(self.update_plot)
 
-    def _create_ui(self):
+    def create_ui(self):
         layout = QVBoxLayout(self)
 
         top_row = QHBoxLayout()
@@ -268,7 +268,7 @@ class FanControllerGUI(QWidget):
         self.apply_button.clicked.connect(self.apply_params)
         self.start_button.clicked.connect(self.start_worker)
         self.stop_button.clicked.connect(self.stop_worker)
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_change_ui)
+        self.mode_combo.currentIndexChanged.connect(self.on_mode_change_ui)
 
     def refresh_ports(self):
         self.port_combo.clear()
@@ -286,9 +286,9 @@ class FanControllerGUI(QWidget):
 
         self.worker = SerialWorker(port, dry_run=dry_run)
 
-        self.worker.data_signal.connect(self._on_new_data)
-        self.worker.error_signal.connect(self._on_error)
-        self.worker.mode_changed.connect(self._on_mode_changed_from_worker)
+        self.worker.data_signal.connect(self.on_new_data)
+        self.worker.error_signal.connect(self.on_error)
+        self.worker.mode_changed.connect(self.on_mode_changed_from_worker)
         self.connect_button.setEnabled(False)
         self.disconnect_button.setEnabled(True)
 
@@ -359,7 +359,7 @@ class FanControllerGUI(QWidget):
         self.plot_timer.stop()
         QMessageBox.information(self, "Stopped", "Control loop stopped.")
 
-    def _on_new_data(self, temp, pwm, timestamp):
+    def on_new_data(self, temp, pwm, timestamp):
         if self.t0 is None:
             self.t0 = timestamp
             rel_time = 0.0
@@ -370,10 +370,10 @@ class FanControllerGUI(QWidget):
         self.temps.append(temp)
         self.pwms.append(pwm)
 
-    def _on_error(self, msg):
+    def on_error(self, msg):
         QMessageBox.critical(self, "Serial Error", msg)
 
-    def _on_mode_changed_from_worker(self, mode, timestamp):
+    def on_mode_changed_from_worker(self, mode, timestamp):
         if self.t0 is None:
             self.t0 = time.time()
             t_ref = self.t0
@@ -381,9 +381,9 @@ class FanControllerGUI(QWidget):
             t_ref = self.t0
 
         self.mode_changes.append((mode, timestamp - t_ref))
-        self._update_plot()
+        self.update_plot()
 
-    def _on_mode_change_ui(self, idx):
+    def on_mode_change_ui(self, idx):
         mode = self.mode_combo.itemData(idx)
         if self.worker:
             self.worker.set_mode(mode)
@@ -395,9 +395,9 @@ class FanControllerGUI(QWidget):
                 t_ref = self.t0
 
             self.mode_changes.append((mode, time.time() - t_ref))
-            self._update_plot()
+            self.update_plot()
 
-    def _update_plot(self):
+    def update_plot(self):
         if len(self.times) == 0:
             return
 
