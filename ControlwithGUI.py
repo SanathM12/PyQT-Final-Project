@@ -92,7 +92,7 @@ class SerialWorker(QThread):
                 elif self.mode == SerialWorker.MODE_PID: # PID control
                     error = temp - self.pid_target
 
-                    if 0 < self.last_output < 255:
+                    if 0 < self._last_pwm < 255:
                         self._integral += error * dt
                     derivative = (error - self._last_error) / dt if dt > 0 else 0.0
                     self._last_error = error
