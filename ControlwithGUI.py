@@ -24,13 +24,12 @@ class SerialWorker(QThread):
     MODE_PID = 1
     MODE_EMERGENCY = 2
 
-    def __init__(self, port, baud=9600, update_interval=0.5, dry_run=False):
+    def __init__(self, port, baud=9600, update_interval=0.5):
         # Variable setup
         super().__init__()
         self.port = port
         self.baud = baud
         self.update_interval = update_interval
-        self.dry_run = dry_run
         self._running = False
         self._ser = None
         
@@ -50,7 +49,7 @@ class SerialWorker(QThread):
         self._last_error = 0.0
         self._last_time = None
 
-        # last pwm (for hysteresis maintaining / simulation)
+        # last pwm (for hysteresis maintaining)
         self._last_pwm = 0
 
     def run(self):
@@ -189,13 +188,9 @@ class FanControllerGUI(QWidget):
         self.disconnect_button = QPushButton("Disconnect")
         self.disconnect_button.setEnabled(False)
 
-        self.dry_run_checkbox = QCheckBox("Simulation Mode (Dry Run)")
-        self.dry_run_checkbox.setChecked(True)
-
         top_row.addWidget(QLabel("Serial Port:"))
         top_row.addWidget(self.port_combo)
         top_row.addWidget(self.refresh_button)
-        top_row.addWidget(self.dry_run_checkbox)
         top_row.addWidget(self.connect_button)
         top_row.addWidget(self.disconnect_button)
         layout.addLayout(top_row)
@@ -276,18 +271,14 @@ class FanControllerGUI(QWidget):
             self.port_combo.addItem(f"{p.device} - {p.description}", p.device)
 
     def connect_serial(self):
-        dry_run = self.dry_run_checkbox.isChecked()
-        port = self.port_combo.currentData() if self.port_combo.count() > 0 else "SIMULATION"
-
-        self.worker = SerialWorker(port, dry_run=dry_run)
+        port = self.port_combo.currentData()
+        self.worker = SerialWorker(port)
 
         self.worker.data_signal.connect(self.on_new_data)
         self.worker.error_signal.connect(self.on_error)
         self.worker.mode_changed.connect(self.on_mode_changed_from_worker)
         self.connect_button.setEnabled(False)
         self.disconnect_button.setEnabled(True)
-
-        status_msg = "Simulation Worker prepared." if dry_run else f"Serial port {port} prepared."
 
     def disconnect_serial(self):
         
@@ -429,4 +420,3 @@ if __name__ == "__main__":
     w = FanControllerGUI()
     w.show()
     sys.exit(app.exec_())
-    
