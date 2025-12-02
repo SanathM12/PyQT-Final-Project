@@ -7,16 +7,14 @@ import serial.tools.list_ports
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtCore import QThread, pyqtSignal, QTimer
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QGroupBox, QFormLayout, QMessageBox, QCheckBox
 )
 
 
-# ----------------------------
-# Worker thread: serial read + control
-# ----------------------------
+# Serial class for interfacing with Arduino
 class SerialWorker(QThread):
     data_signal = pyqtSignal(float, int, float)  # temp, pwm, timestamp
     error_signal = pyqtSignal(str)
@@ -35,7 +33,7 @@ class SerialWorker(QThread):
         self._running = False
         self._ser = None
 
-        # control params (defaults)
+        # control params (default on startup))
         self.mode = SerialWorker.MODE_BANG
         self.bb_low = 24.0
         self.bb_high = 26.0
@@ -45,7 +43,7 @@ class SerialWorker(QThread):
         self.Kd = 5.0
         self.emergency_temp = 40.0
 
-        # PID internals
+        # PID internal variables
         self._integral = 0.0
         self._last_error = 0.0
         self._last_time = None
@@ -53,33 +51,13 @@ class SerialWorker(QThread):
         # last pwm (for hysteresis maintaining / simulation)
         self._last_pwm = 0
 
-        # --- Simulation State (Dry Run) ---
-        self.sim_current_temp = 20.0  # Starting simulated temperature
-        self.ambient_temp = 25.0
-        self.cooling_factor = 3.0
-        self.heating_inertia = 0.2
-
-    def simulate_temperature(self, dt):
-        """Simulates temperature change based on fan output."""
-        fan_cooling_effect = (self._last_pwm / 255.0) * self.cooling_factor * dt
-        heating_rate = (self.ambient_temp - self.sim_current_temp) * self.heating_inertia * dt
-
-        new_temp = self.sim_current_temp + heating_rate - fan_cooling_effect
-
-        new_temp = max(18.0, min(50.0, new_temp))
-
-        self.sim_current_temp = new_temp
-        return new_temp
-
     def run(self):
-        # Open serial (only if not in dry run mode)
-        if not self.dry_run:
-            try:
-                self._ser = serial.Serial(self.port, self.baud, timeout=1)
-                time.sleep(2)
-            except Exception as e:
-                self.error_signal.emit(f"Could not open serial port {self.port}: {e}")
-                return
+        try:
+            self._ser = serial.Serial(self.port, self.baud, timeout=1)
+            time.sleep(2)
+        except Exception as e:
+            self.error_signal.emit(f"Could not open serial port {self.port}: {e}")
+            return
 
         self._running = True
         self._last_time = time.time()
@@ -87,23 +65,15 @@ class SerialWorker(QThread):
         while self._running:
             temp = None
 
-            # --- Read Data (Actual or Simulated) ---
-            if not self.dry_run:
-                try:
-                    raw = self._ser.readline().decode('utf-8', errors='ignore').strip()
-                    if raw:
-                        parts = raw.split(",")
-                        if len(parts) >= 1:
-                            temp = float(parts[0])
-                except Exception as e:
-                    self.error_signal.emit(f"Serial read error: {e}")
-                    temp = None
-            else:
-                # Simulation Read
-                cur_time = time.time()
-                dt = cur_time - self._last_time if self._last_time is not None else 0.0
-                temp = self.simulate_temperature(dt)
-                self._last_time = cur_time
+            try: # reading data
+                raw = self._ser.readline().decode('utf-8', errors='ignore').strip()
+                if raw:
+                    parts = raw.split(",")
+                    if len(parts) >= 1:
+                        temp = float(parts[0])
+            except Exception as e:
+                self.error_signal.emit(f"Serial read error: {e}")
+                temp = None
 
             # Compute dt for control loop
             cur_time = time.time()
@@ -112,12 +82,12 @@ class SerialWorker(QThread):
             # Decide PWM based on mode
             pwm = self._last_pwm
             if temp is not None:
-                if self.mode == SerialWorker.MODE_BANG:
+                if self.mode == SerialWorker.MODE_BANG: # bang-bang control
                     if temp >= self.bb_high:
                         pwm = 255
                     elif temp <= self.bb_low:
                         pwm = 0
-                elif self.mode == SerialWorker.MODE_PID:
+                elif self.mode == SerialWorker.MODE_PID: # PID control
                     error = temp - self.pid_target
                     
                     if 0 < self.last_output < 255:
@@ -130,39 +100,34 @@ class SerialWorker(QThread):
                     output = (self.Kp * error) + (self.Ki * self._integral) + (self.Kd * derivative)
                     pwm = int(max(0, min(255, output)))
 
-                elif self.mode == SerialWorker.MODE_EMERGENCY:
+                elif self.mode == SerialWorker.MODE_EMERGENCY: # emergency mode
                     if temp >= self.emergency_temp:
                         pwm = 255
                     else:
                         pwm = 0
 
-            # Send pwm byte to Arduino
-            if not self.dry_run:
-                try:
-                    if self._ser and self._ser.is_open:
-                        self._ser.write(bytes([pwm]))
-                except Exception as e:
-                    self.error_signal.emit(f"Serial write error: {e}")
+            try: # sending information to Arduino
+                if self._ser and self._ser.is_open:
+                    self._ser.write(bytes([pwm]))
+            except Exception as e:
+                self.error_signal.emit(f"Serial write error: {e}")
 
             # store last pwm
             self._last_pwm = pwm
 
-            # Emit data for GUI plotting
             timestamp = time.time()
             if temp is not None:
-                self.data_signal.emit(temp, pwm, timestamp)
+                self.data_signal.emit(temp, pwm, timestamp) # gathering dataa for GUI plotting
 
             self._last_time = timestamp
 
             time.sleep(self.update_interval)
 
-        # Cleanup
-        if not self.dry_run:
-            if self._ser and self._ser.is_open:
-                try:
-                    self._ser.write(bytes([0]))
-                finally:
-                    self._ser.close()
+        if self._ser and self._ser.is_open: # closing serial terminal
+            try:
+                self._ser.write(bytes([0]))
+            finally:
+                self._ser.close()
 
     def stop(self):
         self._running = False
@@ -190,14 +155,11 @@ class SerialWorker(QThread):
     def set_emergency_threshold(self, temp):
         self.emergency_temp = temp
 
-
-# ----------------------------
 # Main GUI
-# ----------------------------
 class FanControllerGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Fan Controller (PyQt + PID/Bang-Bang/Emergency)")
+        self.setWindowTitle("Fan Controller with PyQT")
         self.resize(1000, 700)
 
         # Data buffer
@@ -210,13 +172,13 @@ class FanControllerGUI(QWidget):
         # Reference time for plotting
         self.t0 = None
 
-        self._create_ui()
+        self.create_ui()
         self.worker = None
         self.plot_timer = QTimer()
         self.plot_timer.setInterval(500)
         self.plot_timer.timeout.connect(self._update_plot)
 
-    def _create_ui(self):
+    def create_ui(self):
         layout = QVBoxLayout(self)
 
         top_row = QHBoxLayout()
@@ -324,9 +286,9 @@ class FanControllerGUI(QWidget):
 
         self.worker = SerialWorker(port, dry_run=dry_run)
 
-        self.worker.data_signal.connect(self._on_new_data)
-        self.worker.error_signal.connect(self._on_error)
-        self.worker.mode_changed.connect(self._on_mode_changed_from_worker)
+        self.worker.data_signal.connect(self.new_data)
+        self.worker.error_signal.connect(self.error)
+        self.worker.mode_changed.connect(self.mode_changed_from_worker)
         self.connect_button.setEnabled(False)
         self.disconnect_button.setEnabled(True)
 
@@ -397,7 +359,7 @@ class FanControllerGUI(QWidget):
         self.plot_timer.stop()
         QMessageBox.information(self, "Stopped", "Control loop stopped.")
 
-    def _on_new_data(self, temp, pwm, timestamp):
+    def new_data(self, temp, pwm, timestamp):
         if self.t0 is None:
             self.t0 = timestamp
             rel_time = 0.0
@@ -408,10 +370,10 @@ class FanControllerGUI(QWidget):
         self.temps.append(temp)
         self.pwms.append(pwm)
 
-    def _on_error(self, msg):
+    def error(self, msg):
         QMessageBox.critical(self, "Serial Error", msg)
 
-    def _on_mode_changed_from_worker(self, mode, timestamp):
+    def mode_changed_from_worker(self, mode, timestamp):
         if self.t0 is None:
             self.t0 = time.time()
             t_ref = self.t0
