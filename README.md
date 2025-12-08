@@ -25,15 +25,27 @@ To run this application, you must have the following Python packages installed
 - Wire up the Arduino to the temperature sensor and fan using the wiring diagram below
 - Upload the provided file to the Arduino
 
+## II. How to wire the Arduino
+- The DHT11 data pin goes to digital 3 on the Arduino
+- The DHT11 positive pin goes to the 5V power on the Arduino
+- The DHT11 negative pin goes to the ground pin on the Arduino
+- The H-Bridge ENA pin goes to digital 6 on the Arduino
+- The H-Bridge IN1 pin goes to digital 5 on the Arduino
+- The H-Bridge IN2 pin goes to digital 5 on the Arduino
+- The 12V positive and negative leads on the H-Bridge go to the positive and negative leads on your external power supply. I utilised a 9V battery, and it worked just fine.
+- Connect the 5V power pin on the H-Bridge to the 5V output on the Arduino
+- The motor leads connect to the screw terminals on the H-Bridge. Switching these cables reverses the forward direction of the motor.
+- Connect a Mini USB from the Arduino Nano to your PC's USB port for the required connection.
+
 <img width="699" height="403" alt="image" src="https://github.com/user-attachments/assets/047a4f02-1a23-4c38-9e53-0b966e7ce07b" />
 
-## II. How to use PyQT GUI
+## III. How to use PyQT GUI
 The GUI is designed for monitoring and switching between manual and automatic control modes.
 
 **Initial Setup** 
 - Verify that the PORT is the same as the Arduino IDE selected port
 - Run the Python Program (ControlwithGUI.py)
-- The application should connected to the specified PORT
+- The application should be connected to the specified PORT
 
 **Monitoring System Status** 
 - Mode: Shows current operational mode (Manual, Bang-Bang, PID, Emergency)
