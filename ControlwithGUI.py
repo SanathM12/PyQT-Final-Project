@@ -180,6 +180,7 @@ class FanControllerGUI(QWidget):
     def create_ui(self):
         layout = QVBoxLayout(self)
 
+        #Arduino controls
         top_row = QHBoxLayout()
         self.port_combo = QComboBox()
         self.refresh_ports()
@@ -188,6 +189,7 @@ class FanControllerGUI(QWidget):
         self.disconnect_button = QPushButton("Disconnect")
         self.disconnect_button.setEnabled(False)
 
+        #Port information
         top_row.addWidget(QLabel("Serial Port:"))
         top_row.addWidget(self.port_combo)
         top_row.addWidget(self.refresh_button)
@@ -195,6 +197,7 @@ class FanControllerGUI(QWidget):
         top_row.addWidget(self.disconnect_button)
         layout.addLayout(top_row)
 
+        #Mode toggle between PID, bang bang and emergency
         mode_box = QGroupBox("Control Mode")
         mode_layout = QHBoxLayout()
         self.mode_combo = QComboBox()
@@ -207,7 +210,8 @@ class FanControllerGUI(QWidget):
         layout.addWidget(mode_box)
 
         params_layout = QHBoxLayout()
-
+        
+        #Bang Bang section
         bb_group = QGroupBox("Bang-Bang")
         bb_form = QFormLayout()
         self.bb_low_input = QLineEdit("24.0")
@@ -217,6 +221,7 @@ class FanControllerGUI(QWidget):
         bb_group.setLayout(bb_form)
         params_layout.addWidget(bb_group)
 
+        #PID section
         pid_group = QGroupBox("PID")
         pid_form = QFormLayout()
         self.pid_target_input = QLineEdit("25.0")
@@ -230,6 +235,7 @@ class FanControllerGUI(QWidget):
         pid_group.setLayout(pid_form)
         params_layout.addWidget(pid_group)
 
+        #Emergency section
         em_group = QGroupBox("Emergency")
         em_form = QFormLayout()
         self.em_temp_input = QLineEdit("40.0")
@@ -238,7 +244,8 @@ class FanControllerGUI(QWidget):
         params_layout.addWidget(em_group)
 
         layout.addLayout(params_layout)
-
+        
+        #Buttons and controls
         buttons = QHBoxLayout()
         self.apply_button = QPushButton("Apply Params")
         self.start_button = QPushButton("Start")
@@ -249,6 +256,7 @@ class FanControllerGUI(QWidget):
         buttons.addWidget(self.stop_button)
         layout.addLayout(buttons)
 
+        #Plot section
         self.fig, self.ax_temp = plt.subplots(1, 1, figsize=(8, 6))
         self.canvas = FigureCanvas(self.fig)
         layout.addWidget(self.canvas)
@@ -271,6 +279,7 @@ class FanControllerGUI(QWidget):
             self.port_combo.addItem(f"{p.device} - {p.description}", p.device)
 
     def connect_serial(self):
+        #Connect with COM port
         port = self.port_combo.currentData()
         self.worker = SerialWorker(port)
 
@@ -287,7 +296,7 @@ class FanControllerGUI(QWidget):
         self.disconnect_button.setEnabled(False)
 
     def apply_params(self):
-
+        #Take user controls and settings and apply them
         try:
             bb_low = float(self.bb_low_input.text())
             bb_high = float(self.bb_high_input.text())
@@ -375,13 +384,15 @@ class FanControllerGUI(QWidget):
 
         self.ax_pwm_twin = self.ax_temp.twinx()
 
+        #Plot temperature
         temp_line, = self.ax_temp.plot(self.times, self.temps, label='Temperature', color='blue')
         self.ax_temp.set_ylabel("Temperature °C", color='blue')
         self.ax_temp.tick_params(axis='y', labelcolor='blue')
         self.ax_temp.set_xlabel("Time (s)")
 
         self.ax_temp.set_xlim(auto=True)
-
+        
+        #Plot PWM
         pwm_line, = self.ax_pwm_twin.plot(self.times, self.pwms, drawstyle='steps-post', label='PWM Output',
                                           color='red', alpha=0.6)
         self.ax_pwm_twin.set_ylabel("PWM (0-255)", color='red')
@@ -404,6 +415,7 @@ class FanControllerGUI(QWidget):
         lines2, labels2 = self.ax_pwm_twin.get_legend_handles_labels()
         self.ax_temp.legend(lines + lines2, labels + labels2, loc='upper right', fontsize=9)
 
+        #Mode changes
         max_temp = max(self.temps) if self.temps else 30
         for (mode, t_rel) in self.mode_changes:
             label = {0: "Bang-Bang", 1: "PID", 2: "Emergency"}.get(mode, str(mode))
